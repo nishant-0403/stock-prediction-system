@@ -1,0 +1,32 @@
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-stockapp}
+      MYSQL_USER: ${MYSQL_USER:-stockuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-stockpass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+  backend:
+    build: ./backend
+    depends_on:
+      - mysql
+      - ml_model
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+  ml_model:
+    build: ./ml_model
+    env_file: .env
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ml_model:/app
+volumes:
+  mysql-data:

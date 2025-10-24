@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+mysql-connector-python
+pandas
+numpy
+yfinance
+python-telegram-bot==13.15
+requests
+pydantic
