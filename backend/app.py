@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from schemas import UserCreate
 import mysql.connector
+from fastapi.middleware.cors import CORSMiddleware
 
 def get_db():
     db = SessionLocal()
@@ -18,6 +19,16 @@ def get_db():
 
 
 app = FastAPI(title="Regular Backend")
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 ML_MODEL_URL = os.getenv("ML_MODEL_URL", "http://localhost:8001/predict")
 
@@ -30,7 +41,21 @@ class WatchlistAddRequest(BaseModel):
     user_id: int
     stock_id: int
 
+class WatchlistAdd(BaseModel):
+    symbol: str
+    user_id: int
+    
+class WatchlistGet(BaseModel):
+    user_id: int
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ThresholdGet(BaseModel):
+    user_id: int
+
+ 
 @app.get('/health')
 def health():
     return {"status": "ok"}
@@ -54,16 +79,12 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     values = (user.name, user.email, user.password, user.telegram_id)
 
     cursor.execute(sql, values)
+    user_id = cursor.lastrowid
+    cursor.execute("INSERT INTO Watchlist (user_id) VALUES (%s)", (user_id,))
     connection.commit()
     cursor.close()
 
     return {"message": "User registered successfully"}
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
 
 @app.post('/login')
 def login(req: LoginRequest, db: Session = Depends(get_db)):
@@ -81,7 +102,9 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     return {"message": "Login successful", "user_id": user[0]}
 
 @app.post("/watchlist/add")
-def add_to_watchlist(symbol: str, user_id: int, session=Depends(get_db)):
+def add_to_watchlist(data: WatchlistAdd, session=Depends(get_db)):
+    symbol = data.symbol
+    user_id = data.user_id
 
     if not user_id or not symbol:
         raise HTTPException(status_code=400, detail="user_id and symbol are required")
@@ -141,8 +164,9 @@ def add_to_watchlist(symbol: str, user_id: int, session=Depends(get_db)):
         db.close()
 
 
-@app.get("/watchlist/{user_id}")
-def get_watchlist(user_id: int):
+@app.post("/watchlist")
+def get_watchlist(data: WatchlistGet):
+    user_id = data.user_id
     db = SessionLocal()
     try:
         result = db.execute(
@@ -234,8 +258,9 @@ def set_threshold(data: dict):
     finally:
         db.close()
 
-@app.get("/threshold/{user_id}")
-def get_thresholds(user_id: int):
+@app.post("/threshold")
+def get_thresholds(data: ThresholdGet):
+    user_id = data.user_id
     db = SessionLocal()
     try:
         result = db.execute(text("""
