@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import axios from 'axios'; // ✅ needed for fetchPrediction
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -8,12 +9,18 @@ import { TrendingUp, TrendingDown, LogOut, Plus, Trash2, Bell } from 'lucide-rea
 import StockChart from '@/components/StockChart';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { getWatchlist, getThresholds, getAvailableStocks, addToWatchlist, removeFromWatchlist, setThreshold as setThresholdApi, checkThreshold } from '@/lib/api';
+import {
+  getWatchlist,
+  getThresholds,
+  getAvailableStocks,
+  addToWatchlist,
+  removeFromWatchlist,
+  setThreshold as setThresholdApi,
+  checkThreshold
+} from '@/lib/api';
 
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8000";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:8000';
 const API = `${BACKEND_URL}`;
-
 
 export default function Dashboard({ user, onLogout }) {
   const [watchlist, setWatchlist] = useState([]);
@@ -24,23 +31,24 @@ export default function Dashboard({ user, onLogout }) {
   const [addStockDialog, setAddStockDialog] = useState(false);
   const [thresholdDialog, setThresholdDialog] = useState(false);
   const [selectedForThreshold, setSelectedForThreshold] = useState(null);
+  const [prediction, setPrediction] = useState(null);
   const [thresholdForm, setThresholdForm] = useState({
     threshold_no: 1,
     upper_limit: '',
-    lower_limit: ''
+    lower_limit: '',
   });
 
+  // fetchWatchlist now RETURNS the data and no longer depends on selectedStock
   const fetchWatchlist = useCallback(async () => {
     try {
       const data = await getWatchlist(user.user_id);
       setWatchlist(data);
-      if (data.length > 0 && !selectedStock) {
-        setSelectedStock(data[0]);
-      }
+      return data;
     } catch (error) {
       toast.error('Failed to fetch watchlist');
+      return [];
     }
-  }, [user.user_id, selectedStock]);
+  }, [user.user_id]);
 
   const fetchThresholds = useCallback(async () => {
     try {
@@ -60,33 +68,54 @@ export default function Dashboard({ user, onLogout }) {
     }
   };
 
-  const checkThresholdBreaches = useCallback(async () => {
-    for (const item of watchlist) {
-      try {
-        const data = await checkThreshold(item.stock_id, user.user_id);
-        if (data.breaches.length > 0) {
-          data.breaches.forEach(breach => {
-            toast.warning(
-              `${breach.symbol}: Price ${breach.current_price} breached ${breach.type} limit of ${breach.limit}`,
-              { duration: 5000 }
-            );
-          });
-        }
-      } catch (error) {
-        console.error('Failed to check thresholds', error);
-      }
+  const fetchPrediction = async (symbol) => {
+    try {
+      const response = await axios.post(`${API}/predict`, {
+        symbol: symbol,
+        history_days: 60,
+      });
+      setPrediction(response.data);
+    } catch (error) {
+      console.error('Prediction fetch failed:', error);
+      setPrediction(null);
     }
-  }, [watchlist, user.user_id]);
+  };
 
+  const checkThresholdBreaches = useCallback(
+    async () => {
+      for (const item of watchlist) {
+        try {
+          const data = await checkThreshold(item.stock_id, user.user_id);
+          if (data.breaches.length > 0) {
+            data.breaches.forEach((breach) => {
+              toast.warning(
+                `${breach.symbol}: Price ${breach.current_price} breached ${breach.type} limit of ${breach.limit}`,
+                { duration: 5000 },
+              );
+            });
+          }
+        } catch (error) {
+          console.error('Failed to check thresholds', error);
+        }
+      }
+    },
+    [watchlist, user.user_id],
+  );
+
+  // Initial load – now also sets default selected stock using returned list
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      await fetchWatchlist();
+      const list = await fetchWatchlist();
+      if (list.length > 0 && !selectedStock) {
+        setSelectedStock(list[0]);
+      }
       await fetchThresholds();
       await fetchAvailableStocks();
       setLoading(false);
     };
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchWatchlist, fetchThresholds]);
 
   useEffect(() => {
@@ -98,54 +127,53 @@ export default function Dashboard({ user, onLogout }) {
     return () => clearInterval(interval);
   }, [fetchWatchlist, checkThresholdBreaches]);
 
-  /*
-  const handleAddStock = async (symbol) => {
+  // fetch prediction whenever selectedStock changes
+  useEffect(() => {
+    if (selectedStock) {
+      fetchPrediction(selectedStock.symbol);
+    }
+  }, [selectedStock]);
+
+  // fixed: removed nonexistent loadWatchlist(), now reuses fetchWatchlist()
+  const handleAddStock = async () => {
+    const symbol = window.prompt('Enter the stock symbol to add to your watchlist:');
+
+    if (!symbol) {
+      toast.error('Symbol cannot be empty');
+      return;
+    }
+
     try {
       await addToWatchlist({
-        symbol,
-        user_id: user.user_id
+        symbol: symbol.trim().toUpperCase(),
+        user_id: user.user_id || user.id,
       });
-      toast.success(`${symbol} added to watchlist`);
-      await fetchWatchlist();
-      setAddStockDialog(false);
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to add stock');
+      toast.success(`Added ${symbol.toUpperCase()} to your watchlist`);
+      const list = await fetchWatchlist();
+      if (!selectedStock && list.length > 0) {
+        setSelectedStock(list[0]);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to add to watchlist');
     }
   };
-  */
-    const handleAddStock = async () => {
-	const symbol = window.prompt("Enter the stock symbol to add to your watchlist:");
-
-	if (!symbol) {
-	    toast.error("Symbol cannot be empty");
-	    return;
-	}
-
-	try {
-	    await addToWatchlist({
-		symbol: symbol.trim().toUpperCase(),
-		user_id: user.user_id || user.id,
-	    });
-	    toast.success(`Added ${symbol.toUpperCase()} to your watchlist`);
-	    await loadWatchlist(); // refresh list if your code has such function
-	} catch (err) {
-	    console.error(err);
-	    toast.error("Failed to add to watchlist");
-	}
-    };
 
   const handleRemoveStock = async (stockId) => {
     try {
       await removeFromWatchlist({
         user_id: user.user_id,
-        stock_id: stockId
+        stock_id: stockId,
       });
       toast.success('Stock removed from watchlist');
-      await fetchWatchlist();
+
+      // refetch fresh list and update selection based on new data
+      const newList = await fetchWatchlist();
       if (selectedStock?.stock_id === stockId) {
-        setSelectedStock(watchlist.find(s => s.stock_id !== stockId) || null);
+        setSelectedStock(newList[0] || null);
       }
     } catch (error) {
+      console.error(error);
       toast.error('Failed to remove stock');
     }
   };
@@ -162,7 +190,7 @@ export default function Dashboard({ user, onLogout }) {
         stock_id: selectedForThreshold.stock_id,
         threshold_no: thresholdForm.threshold_no,
         upper_limit: parseFloat(thresholdForm.upper_limit),
-        lower_limit: parseFloat(thresholdForm.lower_limit)
+        lower_limit: parseFloat(thresholdForm.lower_limit),
       });
       toast.success('Threshold set successfully');
       await fetchThresholds();
@@ -194,25 +222,35 @@ export default function Dashboard({ user, onLogout }) {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: 'linear-gradient(135deg, #e0f7fa 0%, #f1f8e9 100%)' }}>
+    <div
+      className="min-h-screen"
+      style={{ background: 'linear-gradient(135deg, #e0f7fa 0%, #f1f8e9 100%)' }}
+    >
       {/* Header */}
       <div className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="bg-gradient-to-br from-teal-500 to-cyan-600 p-2 rounded-xl" data-testid="dashboard-logo">
+              <div
+                className="bg-gradient-to-br from-teal-500 to-cyan-600 p-2 rounded-xl"
+                data-testid="dashboard-logo"
+              >
                 <TrendingUp className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif' }} data-testid="dashboard-title">
+                <h1
+                  className="text-2xl font-bold"
+                  style={{ fontFamily: 'Space Grotesk, sans-serif' }}
+                  data-testid="dashboard-title"
+                >
                   Stock Monitor
                 </h1>
                 <p className="text-sm text-gray-600">Welcome, {user.name}</p>
               </div>
             </div>
-            <Button 
-              onClick={onLogout} 
-              variant="outline" 
+            <Button
+              onClick={onLogout}
+              variant="outline"
               className="flex items-center space-x-2"
               data-testid="logout-button"
             >
@@ -233,16 +271,44 @@ export default function Dashboard({ user, onLogout }) {
                   <CardHeader className="pb-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <CardTitle className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif' }} data-testid="stock-symbol">
+                        <CardTitle
+                          className="text-3xl font-bold"
+                          style={{ fontFamily: 'Space Grotesk, sans-serif' }}
+                          data-testid="stock-symbol"
+                        >
                           {selectedStock.symbol}
                         </CardTitle>
-                        <CardDescription className="text-base mt-1" data-testid="stock-name">{selectedStock.name}</CardDescription>
+                        <CardDescription
+                          className="text-base mt-1"
+                          data-testid="stock-name"
+                        >
+                          {selectedStock.name}
+                        </CardDescription>
                       </div>
                       <div className="text-right">
-                        <div className="text-3xl font-bold" data-testid="stock-price">${selectedStock.current_price}</div>
-                        <div className={`flex items-center justify-end space-x-1 ${getSignalColor(selectedStock.change_percent)}`}>
-                          {selectedStock.change_percent > 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                          <span className="font-medium" data-testid="stock-change">{selectedStock.change_percent > 0 ? '+' : ''}{selectedStock.change_percent}%</span>
+                        <div
+                          className="text-3xl font-bold"
+                          data-testid="stock-price"
+                        >
+                          ${selectedStock.current_price}
+                        </div>
+                        <div
+                          className={`flex items-center justify-end space-x-1 ${getSignalColor(
+                            selectedStock.change_percent,
+                          )}`}
+                        >
+                          {selectedStock.change_percent > 0 ? (
+                            <TrendingUp className="w-4 h-4" />
+                          ) : (
+                            <TrendingDown className="w-4 h-4" />
+                          )}
+                          <span
+                            className="font-medium"
+                            data-testid="stock-change"
+                          >
+                            {selectedStock.change_percent > 0 ? '+' : ''}
+                            {selectedStock.change_percent}%
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -251,7 +317,10 @@ export default function Dashboard({ user, onLogout }) {
                     <div className="mb-4">
                       {getSignalBadge(selectedStock.change_percent)}
                     </div>
-                    <StockChart symbol={selectedStock.symbol} />
+                    <StockChart
+                      symbol={selectedStock.symbol}
+                      prediction={prediction}
+                    />
                   </CardContent>
                 </Card>
 
@@ -259,10 +328,18 @@ export default function Dashboard({ user, onLogout }) {
                 <Card className="shadow-lg border-0" data-testid="threshold-card">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-xl font-bold" data-testid="threshold-title">Price Alerts</CardTitle>
-                      <Dialog open={thresholdDialog} onOpenChange={setThresholdDialog}>
+                      <CardTitle
+                        className="text-xl font-bold"
+                        data-testid="threshold-title"
+                      >
+                        Price Alerts
+                      </CardTitle>
+                      <Dialog
+                        open={thresholdDialog}
+                        onOpenChange={setThresholdDialog}
+                      >
                         <DialogTrigger asChild>
-                          <Button 
+                          <Button
                             size="sm"
                             className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700"
                             onClick={() => setSelectedForThreshold(selectedStock)}
@@ -274,17 +351,26 @@ export default function Dashboard({ user, onLogout }) {
                         </DialogTrigger>
                         <DialogContent data-testid="threshold-dialog">
                           <DialogHeader>
-                            <DialogTitle>Set Price Alert for {selectedForThreshold?.symbol}</DialogTitle>
+                            <DialogTitle>
+                              Set Price Alert for {selectedForThreshold?.symbol}
+                            </DialogTitle>
                             <DialogDescription>
                               Get notified when the price crosses these limits
                             </DialogDescription>
                           </DialogHeader>
                           <div className="space-y-4 mt-4">
                             <div className="space-y-2">
-                              <label className="text-sm font-medium">Threshold Number</label>
-                              <Select 
+                              <label className="text-sm font-medium">
+                                Threshold Number
+                              </label>
+                              <Select
                                 value={thresholdForm.threshold_no.toString()}
-                                onValueChange={(val) => setThresholdForm({...thresholdForm, threshold_no: parseInt(val)})}
+                                onValueChange={(val) =>
+                                  setThresholdForm({
+                                    ...thresholdForm,
+                                    threshold_no: parseInt(val),
+                                  })
+                                }
                               >
                                 <SelectTrigger data-testid="threshold-number-select">
                                   <SelectValue />
@@ -297,29 +383,43 @@ export default function Dashboard({ user, onLogout }) {
                               </Select>
                             </div>
                             <div className="space-y-2">
-                              <label className="text-sm font-medium">Upper Limit ($)</label>
+                              <label className="text-sm font-medium">
+                                Upper Limit ($)
+                              </label>
                               <Input
                                 type="number"
                                 step="0.01"
                                 placeholder="200.00"
                                 value={thresholdForm.upper_limit}
-                                onChange={(e) => setThresholdForm({...thresholdForm, upper_limit: e.target.value})}
+                                onChange={(e) =>
+                                  setThresholdForm({
+                                    ...thresholdForm,
+                                    upper_limit: e.target.value,
+                                  })
+                                }
                                 data-testid="upper-limit-input"
                               />
                             </div>
                             <div className="space-y-2">
-                              <label className="text-sm font-medium">Lower Limit ($)</label>
+                              <label className="text-sm font-medium">
+                                Lower Limit ($)
+                              </label>
                               <Input
                                 type="number"
                                 step="0.01"
                                 placeholder="150.00"
                                 value={thresholdForm.lower_limit}
-                                onChange={(e) => setThresholdForm({...thresholdForm, lower_limit: e.target.value})}
+                                onChange={(e) =>
+                                  setThresholdForm({
+                                    ...thresholdForm,
+                                    lower_limit: e.target.value,
+                                  })
+                                }
                                 data-testid="lower-limit-input"
                               />
                             </div>
-                            <Button 
-                              onClick={handleSetThreshold} 
+                            <Button
+                              onClick={handleSetThreshold}
                               className="w-full bg-gradient-to-r from-teal-500 to-cyan-600"
                               data-testid="save-threshold-button"
                             >
@@ -331,32 +431,58 @@ export default function Dashboard({ user, onLogout }) {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {thresholds.filter(t => t.stock_id === selectedStock.stock_id).length > 0 ? (
-                      <div className="space-y-2" data-testid="threshold-list">
-                        {thresholds.filter(t => t.stock_id === selectedStock.stock_id).map((threshold, idx) => (
-                          <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg" data-testid={`threshold-item-${idx}`}>
-                            <div>
-                              <div className="font-medium">Threshold {threshold.threshold_no}</div>
-                              <div className="text-sm text-gray-600">
-                                ${threshold.lower_limit} - ${threshold.upper_limit}
+                    {thresholds.filter(
+                      (t) => t.stock_id === selectedStock.stock_id,
+                    ).length > 0 ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="threshold-list"
+                      >
+                        {thresholds
+                          .filter((t) => t.stock_id === selectedStock.stock_id)
+                          .map((threshold, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                              data-testid={`threshold-item-${idx}`}
+                            >
+                              <div>
+                                <div className="font-medium">
+                                  Threshold {threshold.threshold_no}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  ${threshold.lower_limit} - $
+                                  {threshold.upper_limit}
+                                </div>
                               </div>
+                              <Badge variant="outline">Active</Badge>
                             </div>
-                            <Badge variant="outline">Active</Badge>
-                          </div>
-                        ))}
+                          ))}
                       </div>
                     ) : (
-                      <p className="text-gray-500 text-center py-4" data-testid="no-thresholds">No alerts set for this stock</p>
+                      <p
+                        className="text-gray-500 text-center py-4"
+                        data-testid="no-thresholds"
+                      >
+                        No alerts set for this stock
+                      </p>
                     )}
                   </CardContent>
                 </Card>
               </>
             ) : (
-              <Card className="shadow-lg border-0" data-testid="no-stocks-card">
+              <Card
+                className="shadow-lg border-0"
+                data-testid="no-stocks-card"
+              >
                 <CardContent className="py-12 text-center">
                   <TrendingUp className="w-16 h-16 mx-auto text-gray-400 mb-4" />
-                  <h3 className="text-xl font-semibold mb-2">No Stocks in Watchlist</h3>
-                  <p className="text-gray-600 mb-4">Add stocks to start monitoring</p>
+                  <h3 className="text-xl font-semibold mb-2">
+                    No Stocks in Watchlist
+                  </h3>
+                  <p className="text-gray-600 mb-4">
+                    Add stocks to start monitoring
+                  </p>
                 </CardContent>
               </Card>
             )}
@@ -364,20 +490,25 @@ export default function Dashboard({ user, onLogout }) {
 
           {/* Watchlist Sidebar */}
           <div className="space-y-6">
-            <Card className="shadow-lg border-0" data-testid="watchlist-card">
+            <Card
+              className="shadow-lg border-0"
+              data-testid="watchlist-card"
+            >
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-xl font-bold">Watchlist</CardTitle>
+                  <CardTitle className="text-xl font-bold">
+                    Watchlist
+                  </CardTitle>
                 </div>
-      <Button
-      size="sm"
-      className="bg-gradient-to-r from-teal-500 to-cyan-600"
-      data-testid="add-stock-button"
-      onClick={handleAddStock}
-      >
-      <Plus className="w-4 h-4 mr-2" />
-      Add
-      </Button>
+                <Button
+                  size="sm"
+                  className="bg-gradient-to-r from-teal-500 to-cyan-600"
+                  data-testid="add-stock-button"
+                  onClick={handleAddStock}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add
+                </Button>
               </CardHeader>
               <CardContent className="space-y-2">
                 {watchlist.length > 0 ? (
@@ -405,18 +536,38 @@ export default function Dashboard({ user, onLogout }) {
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
-                      <div className="text-sm text-gray-600 mb-1">{stock.name}</div>
+                      <div className="text-sm text-gray-600 mb-1">
+                        {stock.name}
+                      </div>
                       <div className="flex items-center justify-between">
-                        <div className="font-medium">${stock.current_price}</div>
-                        <div className={`flex items-center space-x-1 text-sm ${getSignalColor(stock.change_percent)}`}>
-                          {stock.change_percent > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                          <span>{stock.change_percent > 0 ? '+' : ''}{stock.change_percent}%</span>
+                        <div className="font-medium">
+                          ${stock.current_price}
+                        </div>
+                        <div
+                          className={`flex items-center space-x-1 text-sm ${getSignalColor(
+                            stock.change_percent,
+                          )}`}
+                        >
+                          {stock.change_percent > 0 ? (
+                            <TrendingUp className="w-3 h-3" />
+                          ) : (
+                            <TrendingDown className="w-3 h-3" />
+                          )}
+                          <span>
+                            {stock.change_percent > 0 ? '+' : ''}
+                            {stock.change_percent}%
+                          </span>
                         </div>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <p className="text-gray-500 text-center py-4" data-testid="empty-watchlist">Your watchlist is empty</p>
+                  <p
+                    className="text-gray-500 text-center py-4"
+                    data-testid="empty-watchlist"
+                  >
+                    Your watchlist is empty
+                  </p>
                 )}
               </CardContent>
             </Card>
@@ -426,3 +577,4 @@ export default function Dashboard({ user, onLogout }) {
     </div>
   );
 }
+

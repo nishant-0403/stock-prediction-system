@@ -74,6 +74,40 @@ export default function StockChart({ symbol }) {
 }
 */
 
-export default function StockChart() {
-  return <div style={{ textAlign: "center", color: "gray" }}>Coming soon...</div>;
+export default function StockChart({ symbol, prediction }) {
+  if (!symbol) {
+    return (
+      <div style={{ textAlign: "center", color: "gray" }}>
+        Select a stock to see prediction
+      </div>
+    );
+  }
+
+  if (!prediction) {
+    return (
+      <div style={{ textAlign: "center", color: "gray" }}>
+        Loading prediction...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ textAlign: "center", padding: "20px" }}>
+      <h2 className="text-xl font-semibold">Prediction for {symbol}</h2>
+
+      <p className="text-2xl mt-4">
+        Predicted Price:{" "}
+        <span className="font-bold text-blue-600">
+          ${prediction.predicted_price.toFixed(2)}
+        </span>
+      </p>
+
+      {prediction.confidence !== undefined && (
+        <p className="text-gray-500 mt-2">
+          Confidence: {(prediction.confidence * 100).toFixed(0)}%
+        </p>
+      )}
+    </div>
+  );
 }
+
